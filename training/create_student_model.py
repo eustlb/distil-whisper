@@ -166,8 +166,6 @@ def init_student_model_from_teacher(
                 f"Unexpected key(s) in state_dict: {encoder_keys}"
             )
         
-    print(decoder_map)
-
     for layer in range(teacher_decoder_layers):
         if layer in decoder_map:
             # re-introduce pre-defined layers from the teacher
