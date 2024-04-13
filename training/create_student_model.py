@@ -63,7 +63,7 @@ def parse_args():
         "--decoder_layers_numbers",
         type=int,
         nargs="*",
-        help="Layerd numberd of the decoder teacher to use in the student model. Defaults to first and last layer (equiv. 0 -1)",
+        help="Layers numbers of the decoder teacher to use in the student model. Defaults to first and last layer (equiv. 0 -1)",
     )
     parser.add_argument(
         "--save_dir",
