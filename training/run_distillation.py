@@ -850,6 +850,7 @@ def main():
 
     # set seed for determinism
     set_seed(training_args.seed)
+    np.random.seed(training_args.seed)
 
     if training_args.do_train:
         raw_datasets["train"] = load_multiple_datasets(
