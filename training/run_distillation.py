@@ -1009,7 +1009,7 @@ def main():
             )
 
     logger.infor(
-        f"Number of trainable parameters: {sum(p.numel() for p in teacher_model.parameters()):.3e}"
+        f"Number of trainable parameters: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
     )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
