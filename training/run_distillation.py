@@ -1008,7 +1008,7 @@ def main():
                 "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
             )
 
-    logger.infor(
+    logger.info(
         f"Number of trainable parameters: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
     )
 
