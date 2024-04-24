@@ -362,6 +362,10 @@ class DistillationTrainingArguments(Seq2SeqTrainingArguments):
         default=False,
         metadata={"help": "Whether to freeze the decoder embedding positions."},
     )
+    freeze_lm_head: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to freeze the language modeling head."},
+    )
     temperature: Optional[float] = field(
         default=2.0, metadata={"help": "Temperature to anneal the logits when computing the softmax."}
     )
@@ -993,6 +997,9 @@ def main():
         set_trainable_parameters(student_model.model.encoder, requires_grad=False)
         student_model.model.encoder.gradient_checkpointing = False
 
+    if training_args.freeze_lm_head:
+        set_trainable_parameters(student_model.proj_out, requires_grad=False)
+
     if training_args.freeze_embed_positions:
         # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
         set_trainable_parameters(student_model.model.decoder.embed_positions, requires_grad=False)
@@ -1000,6 +1007,10 @@ def main():
             logger.info(
                 "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
             )
+
+    logger.infor(
+        f"Number of trainable parameters: {sum(p.numel() for p in teacher_model.parameters()):.3e}"
+    )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
     if share_hidden_states:
