@@ -1014,11 +1014,11 @@ def main():
 
     if training_args.freeze_lm_head:
         logger.info(
-            f"Number of trainable parameters before freezing LM head: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
+            f"Number of trainable parameters before freezing LM head: {sum(p.numel() for p in student_model.parameters() if p.requires_grad):.3e}"
         )
         set_trainable_parameters(student_model.proj_out, requires_grad=False)
         logger.info(
-            f"Number of trainable after freezing LM head: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
+            f"Number of trainable after freezing LM head: {sum(p.numel() for p in student_model.parameters() if p.requires_grad):.3e}"
         )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
