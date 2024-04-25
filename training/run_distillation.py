@@ -35,7 +35,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import Accelerator
+from accelerate import (
+    Accelerator,
+    DistributedDataParallelKwargs
+)
 from accelerate.logging import get_logger
 from datasets import (
     DatasetDict,
@@ -777,11 +780,15 @@ def main():
         mixed_precision = "no"
         teacher_dtype = torch.float32
 
+    if training_args.freeze_lm_head:
+        kwargs_handlers = [DistributedDataParallelKwargs(find_unused_parameters=True)]
+
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
         mixed_precision=mixed_precision,
         log_with=training_args.report_to,
         project_dir=training_args.output_dir,
+        kwargs_handlers=kwargs_handlers
     )
 
     accelerator.init_trackers(
@@ -997,9 +1004,6 @@ def main():
         set_trainable_parameters(student_model.model.encoder, requires_grad=False)
         student_model.model.encoder.gradient_checkpointing = False
 
-    if training_args.freeze_lm_head:
-        set_trainable_parameters(student_model.proj_out, requires_grad=False)
-
     if training_args.freeze_embed_positions:
         # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
         set_trainable_parameters(student_model.model.decoder.embed_positions, requires_grad=False)
@@ -1008,9 +1012,14 @@ def main():
                 "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
             )
 
-    logger.info(
-        f"Number of trainable parameters: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
-    )
+    if training_args.freeze_lm_head:
+        logger.info(
+            f"Number of trainable parameters before freezing LM head: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
+        )
+        set_trainable_parameters(student_model.proj_out, requires_grad=False)
+        logger.info(
+            f"Number of trainable after freezing LM head: {sum(p.numel() for p in teacher_model.parameters() if p.requires_grad):.3e}"
+        )
 
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
     if share_hidden_states:
@@ -1342,11 +1351,19 @@ def main():
         eval_steps = training_args.eval_steps
 
     # 13. Define optimizer, LR scheduler, collator
+    if training_args.freeze_encoder:
+        forbidden_module = [student_model.model.encoder]
+        if training_args.freeze_lm_head:
+            forbidden_module.append(student_model.proj_out)
+    else:
+        forbidden_module = None
+
     decay_parameters = get_parameter_names(
         student_model,
         [nn.LayerNorm],
-        forbidden_module=[student_model.model.encoder] if training_args.freeze_encoder else None,
+        forbidden_module=forbidden_module,
     )
+
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
         {
