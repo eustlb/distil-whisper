@@ -699,6 +699,7 @@ def sorted_checkpoints(output_dir=None, checkpoint_prefix="checkpoint") -> List[
     ordering_and_checkpoint_path = []
 
     glob_checkpoints = [str(x) for x in Path(output_dir).glob(f"{checkpoint_prefix}-*") if os.path.isdir(x)]
+    glob_checkpoints = [path for path in glob_checkpoints if "val-wer" not in path]
 
     for path in glob_checkpoints:
         regex_match = re.match(f".*{checkpoint_prefix}-([0-9]+)", path)
@@ -1738,11 +1739,12 @@ def main():
                     train_start = time.time()
 
                     # save best checkpoint
-                    numerators = [wer * len(labs) for wer, labs in zip(wer_l, labels_l)] 
+                    numerators = [wer['wer'] * len(labs) for wer, labs in zip(wer_l, labels_l)] 
                     val_wer = sum(numerators) / sum(len(labs) for labs in labels_l)
 
                     if val_wer < best_val_wer:
                         intermediate_dir = os.path.join(training_args.output_dir, f"checkpoint-{cur_step}-epoch-{epoch}-val-wer-{val_wer:.3f}")
+                        logger.info(f"Saving new best model, validation WER: {val_wer:.3f}")
                         accelerator.save_state(output_dir=intermediate_dir)
                         accelerator.wait_for_everyone()
 
