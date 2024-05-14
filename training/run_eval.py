@@ -290,12 +290,13 @@ def write_wandb_pred(
     norm_pred_str,
     norm_label_str,
     wer_per_sample,
+    sample_ids,
     prefix="eval",
 ):
-    columns = ["WER", "Target", "Pred", "Norm Target", "Norm Pred"]
+    columns = ["Sample ID", "WER", "Target", "Pred", "Norm Target", "Norm Pred"]
     # convert str data to a wandb compatible format
     str_data = [
-        [wer_per_sample[i], label_str[i], pred_str[i], norm_label_str[i], norm_pred_str[i]]
+        [sample_ids[i], wer_per_sample[i], label_str[i], pred_str[i], norm_label_str[i], norm_pred_str[i]]
         for i in range(len(pred_str))
     ]
 
@@ -461,6 +462,7 @@ def main():
             streaming=data_args.streaming,
             num_proc=data_args.preprocessing_num_workers,
         )
+
         if dataset_dict["text_column_name"] not in list(sub_dataset.features.keys()):
             raise ValueError(
                 f"`--text_column_name` {dataset_dict['text_column_name']} not found in the evaluation "
@@ -471,7 +473,7 @@ def main():
             sub_dataset = sub_dataset.rename_column(dataset_dict["text_column_name"], "text")
         if not data_args.streaming:
             sub_dataset = sub_dataset.to_iterable_dataset()
-
+        
         # Clean-up the dataset name for pretty logging
         # ("distil-whisper/librispeech_asr", "validation.clean") -> "librispeech_asr/validation-clean"
         pretty_name = f"{dataset_dict['name'].split('/')[-1]}/{dataset_dict['split'].replace('.', '-')}"
@@ -552,6 +554,10 @@ def main():
         for split in raw_datasets:
             raw_datasets[split] = raw_datasets[split].take(data_args.samples_per_dataset)
 
+    def extract_id(sample):
+        path = sample['path']
+        return path.split('/')[-1].split('.')[0]
+
     def prepare_dataset(batch):
         # process audio
         audio = [sample["array"].astype(np.float32) for sample in batch[audio_column_name]]
@@ -581,6 +587,8 @@ def main():
         batch["length_in_s"] = [len(sample) / sampling_rate for sample in audio]
         # process targets
         batch["reference"] = batch["text"]
+        batch["sample_id"] = [extract_id(sample) for sample in batch[audio_column_name]]
+
         return batch
 
     vectorized_datasets = IterableDatasetDict()
@@ -714,11 +722,13 @@ def main():
 
     datasets_evaluated_progress_bar = tqdm(result_datasets, desc="Datasets", position=0)
     for split in datasets_evaluated_progress_bar:
+        
         transcriptions = []
         references = []
         stats = {}
         times_audio_total = 0
         times_transcription_total = 0
+        sample_ids = []
 
         datasets_evaluated_progress_bar.write(f"Start benchmarking {split}...")
         result_iter = iter(result_datasets[split])
@@ -730,6 +740,7 @@ def main():
                 result["transcription"] = result["transcription"].replace(data_args.prompt_text, "")
             transcriptions.append(result["transcription"])
             references.append(result["reference"])
+            sample_ids.append(result["sample_id"])
 
         norm_transcriptions = [normalizer(pred) for pred in transcriptions]
         norm_references = [normalizer(label) for label in references]
@@ -764,6 +775,7 @@ def main():
                 norm_transcriptions,
                 norm_references,
                 wer_per_sample,
+                sample_ids,
                 prefix=split,
             )
 
