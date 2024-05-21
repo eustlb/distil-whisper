@@ -46,6 +46,7 @@ from datasets import (
     interleave_datasets,
     load_dataset,
 )
+from peft import LoraConfig, get_peft_model
 from huggingface_hub import create_repo, get_full_repo_name, upload_folder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -136,6 +137,46 @@ class ModelArguments:
                 "3. `flash_attn_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
             )
         },
+    )
+    use_peft_lora: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to use peft LoRA."
+            )
+        }
+    )
+    lora_r: int = field(
+        default=8,
+        metadata={
+            "help": (
+                "The rank for LoRA."
+            )
+        }
+    )
+    lora_alpha: float = field(
+        default=16.0,
+        metadata={
+            "help": (
+                "The alpha parameter for LoRA."
+            )
+        }
+    )
+    lora_dropout: float = field(
+        default=0.1,
+        metadata={
+            "help": (
+                "The dropout rate for LoRA."
+            )
+        }
+    )
+    lora_target_modules: List[str] = field(
+        default_factory=lambda: ["all"],
+        metadata={
+            "help": (
+                "The target modules for applying LoRA."
+            )
+        }
     )
 
     def __post_init__(self):
@@ -978,6 +1019,25 @@ def main():
         low_cpu_mem_usage=True,
         attn_implementation=model_args.attn_implementation,
     )
+
+    if model_args.use_peft_lora:
+        config = LoraConfig(
+            r=model_args.lora_r,
+            lora_alpha=model_args.lora_alpha,
+            target_modules=model_args.lora_target_modules,
+            lora_dropout=model_args.lora_dropout,
+            bias="none"
+        )
+
+        student_model = get_peft_model(student_model, config)
+        
+        trainable_params, all_param = student_model.get_nb_trainable_parameters()
+        logger.info(
+            f"trainable params: {trainable_params:,d} || "
+            f"all params: {all_param:,d} || "
+            f"trainable%: {100 * trainable_params / all_param:.4f}"
+        )
+
 
     if student_model.config.decoder_start_token_id is None or teacher_model.config.decoder_start_token_id is None:
         raise ValueError(
