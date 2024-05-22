@@ -1744,37 +1744,26 @@ def main():
 
                     if val_wer < best_val_wer:
                         intermediate_dir = os.path.join(training_args.output_dir, f"checkpoint-{cur_step}-epoch-{epoch}-val-wer-{val_wer:.3f}")
-                        logger.info(f"Saving new best model, validation WER: {val_wer:.3f}")
+                        logger.info(f"Saving new best model, validation WER: {val_wer:.3f}")  
                         accelerator.save_state(output_dir=intermediate_dir)
                         accelerator.wait_for_everyone()
 
-                        # remove unnecesary checkpoints
+                        # remove unnecesary checkpoints, save best model and push to hub
                         if accelerator.is_main_process:
                             rotate_checkpoints(training_args.save_best_total_limit, output_dir=training_args.output_dir, sorting_fn=sorted_best_checkpoints)
+                            
+                            accelerator.unwrap_model(student_model).save_pretrained(training_args.output_dir)
 
                             if training_args.push_to_hub:
                                 upload_folder(
                                     folder_path=training_args.output_dir,
                                     repo_id=repo_name,
                                     repo_type="model",
-                                    commit_message=f"Saving train state of step {cur_step}",
+                                    commit_message=f"Saving best state, step {cur_step}, val wer {val_wer:.3f}",
                                 )
 
                 # break condition
                 if cur_step == total_train_steps:
-
-                    # un-wrap student model for save
-                    student_model = accelerator.unwrap_model(student_model)
-                    student_model.save_pretrained(training_args.output_dir)
-
-                    if training_args.push_to_hub:
-                        upload_folder(
-                            folder_path=training_args.output_dir,
-                            repo_id=repo_name,
-                            repo_type="model",
-                            commit_message=f"Saving final weights of step {cur_step}",
-                        )
-
                     continue_training = False
                     break
 
