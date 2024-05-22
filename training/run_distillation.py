@@ -171,7 +171,7 @@ class ModelArguments:
         }
     )
     lora_target_modules: List[str] = field(
-        default_factory=lambda: ["all"],
+        default_factory=lambda: ["q_proj", "v_proj"],
         metadata={
             "help": (
                 "The target modules for applying LoRA."
@@ -1021,10 +1021,30 @@ def main():
     )
 
     if model_args.use_peft_lora:
+        target_modules = []
+        # not done using simple target_modules regex match because of decoder embed_tokens edge case
+        if not training_args.freeze_encoder:
+            pattern = r"model\.encoder.*(k_proj|q_proj|v_proj|out_proj)"
+            target_modules.extend(
+                [name for name, _ in student_model.named_modules() if re.match(pattern, name)]
+            )
+
+        if not training_args.freeze_decoder:
+            pattern = r"model\.decoder.*(k_proj|q_proj|v_proj|out_proj|embed_tokens)"
+            target_modules.extend(
+                [name for name, _ in student_model.named_modules() if re.match(pattern, name)]
+            ) 
+
+        if not training_args.freeze_embed_positions:
+            pattern = r".*decoder.*embed_positions"
+            target_modules.extend(
+                [name for name, _ in student_model.named_modules() if re.match(pattern, name)]
+            )
+        
         config = LoraConfig(
             r=model_args.lora_r,
             lora_alpha=model_args.lora_alpha,
-            target_modules=model_args.lora_target_modules,
+            target_modules=target_modules,
             lora_dropout=model_args.lora_dropout,
             bias="none"
         )
@@ -1055,25 +1075,25 @@ def main():
             param.requires_grad = requires_grad
         module._requires_grad = requires_grad
 
-    # freeze student encoder if necessary
-    if training_args.freeze_encoder:
-        set_trainable_parameters(student_model.model.encoder, requires_grad=False)
-        student_model.model.encoder.gradient_checkpointing = False
-    
-    if training_args.freeze_decoder:
-        set_trainable_parameters(student_model.model.decoder, requires_grad=False)
-        student_model.model.decoder.gradient_checkpointing = False
-        # un-freeze LM head parameters (and consequently word embeddings), frozen when frozing decoder since tied word embedding and LM head
-        set_trainable_parameters(student_model.proj_out, requires_grad=True) 
+    if not model_args.use_peft_lora: # freeezing layers is already handled when getting peft model
+        # freeze student encoder if necessary
+        if training_args.freeze_encoder:
+            set_trainable_parameters(student_model.model.encoder, requires_grad=False)
+            student_model.model.encoder.gradient_checkpointing = False
         
-
-    if training_args.freeze_embed_positions:
-        # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
-        set_trainable_parameters(student_model.model.decoder.embed_positions, requires_grad=False)
-        if student_model.model.decoder.gradient_checkpointing:
-            logger.info(
-                "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
-            )
+        if training_args.freeze_decoder:
+            set_trainable_parameters(student_model.model.decoder, requires_grad=False)
+            student_model.model.decoder.gradient_checkpointing = False
+            # un-freeze LM head parameters (and consequently word embeddings), frozen when frozing decoder since tied word embedding and LM head
+            set_trainable_parameters(student_model.proj_out, requires_grad=True) 
+            
+        if training_args.freeze_embed_positions:
+            # set_trainable_parameters(student_model.model.decoder.embed_tokens, requires_grad=False)
+            set_trainable_parameters(student_model.model.decoder.embed_positions, requires_grad=False)
+            if student_model.model.decoder.gradient_checkpointing:
+                logger.info(
+                    "Disabling gradient checkpointing in the decoder since it's incompatible with `freeze_embed_positions`."
+                )
     
     logger.info(
         f"Number of trainable parameters: {sum(p.numel() for p in student_model.parameters() if p.requires_grad):.3e}"
@@ -1082,7 +1102,7 @@ def main():
     share_hidden_states = training_args.freeze_encoder and student_model.config.d_model == teacher_model.config.d_model
     if share_hidden_states:
         # tie the weights for the teacher encoder if we're freezing the student and it's the same as the teacher
-        teacher_model.model.encoder = student_model.model.encoder
+        teacher_model.model.encoder = student_model.get_encoder()
 
     if hasattr(teacher_model.generation_config, "is_multilingual") and teacher_model.generation_config.is_multilingual:
         # We need to set the language and task ids for previously multilingual checkpoints
@@ -1413,8 +1433,8 @@ def main():
     forbidden_module = [
         module
         for module, flag in [
-            (student_model.model.encoder, training_args.freeze_encoder),
-            (student_model.model.decoder, training_args.freeze_decoder)
+            (student_model.get_encoder(), training_args.freeze_encoder),
+            (student_model.get_decoder(), training_args.freeze_decoder)
         ]
         if flag
     ] or None
