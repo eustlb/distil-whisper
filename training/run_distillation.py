@@ -46,7 +46,7 @@ from datasets import (
     interleave_datasets,
     load_dataset,
 )
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from huggingface_hub import create_repo, get_full_repo_name, upload_folder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -59,7 +59,8 @@ from transformers import (
     WhisperForConditionalGeneration,
     WhisperProcessor,
     WhisperTokenizerFast,
-    get_scheduler
+    BitsAndBytesConfig,
+    get_scheduler,
 )
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer, EnglishTextNormalizer
@@ -175,6 +176,14 @@ class ModelArguments:
         metadata={
             "help": (
                 "The target modules for applying LoRA."
+            )
+        }
+    )
+    use_quantization: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to quantize the models."
             )
         }
     )
@@ -972,7 +981,7 @@ def main():
         raise ValueError(
             "Cannot not train and not do evaluation. At least one of training or evaluation has to be performed."
         )
-
+    
     # 7. Load pretrained model, tokenizer, and feature extractor
     config = WhisperConfig.from_pretrained(
         (model_args.config_name if model_args.config_name else model_args.model_name_or_path),
@@ -998,6 +1007,14 @@ def main():
     timestamps = [AddedToken("<|%.2f|>" % (i * 0.02), lstrip=False, rstrip=False) for i in range(1500 + 1)]
     tokenizer.add_tokens(timestamps)
 
+    if model_args.use_quantization:
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True
+        )
+    else:
+        quantization_config = None
+
+
     # The teacher model can safely be cast to the dtype of training since we don't
     # update the params
     teacher_model = WhisperForConditionalGeneration.from_pretrained(
@@ -1007,6 +1024,7 @@ def main():
         low_cpu_mem_usage=True,
         torch_dtype=teacher_dtype,
         attn_implementation=model_args.attn_implementation,
+        quantization_config=quantization_config
     )
 
     student_model = WhisperForConditionalGeneration.from_pretrained(
@@ -1018,7 +1036,12 @@ def main():
         token=model_args.token,
         low_cpu_mem_usage=True,
         attn_implementation=model_args.attn_implementation,
+        quantization_config=quantization_config
     )
+
+    if model_args.use_quantization:
+        teacher_model = prepare_model_for_kbit_training(teacher_model)
+        student_model = prepare_model_for_kbit_training(student_model)
 
     if model_args.use_peft_lora:
         target_modules = []
