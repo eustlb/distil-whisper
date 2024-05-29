@@ -1143,16 +1143,23 @@ def main():
             return False
         elif len(norm_ground_truth) > 0 and whisper_transcript is not None:
             norm_whisper_transcript = normalizer(whisper_transcript)
-            wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
-            return wer < wer_threshold
+            if len(norm_whisper_transcript) == 0:
+                return False
+            try:
+                wer = 100 * metric.compute(predictions=[norm_whisper_transcript], references=[norm_ground_truth])
+                return wer < wer_threshold
+            except ValueError:
+                return False
         else:
             # filter automatically since we can't know the WER
             return False
-
+        
+    print(f"0 fingerprint: {raw_datasets['train']._fingerprint, raw_datasets['train']._get_cache_file_path(raw_datasets['train']._fingerprint)}")
+   
     filter_by_wer_threshold = partial(
         raw_datasets["train"].filter,
         function=is_wer_in_range,
-        input_columns=["text", "whisper_transcript"],
+        input_columns=["text", "whisper_transcript"]
     )
 
     if wer_threshold is not None and use_pseudo_labels:
@@ -1162,6 +1169,7 @@ def main():
                 if not data_args.streaming
                 else filter_by_wer_threshold()
             )
+    print(f"1 fingerprint: {raw_datasets['train']._fingerprint, raw_datasets['train']._get_cache_file_path(raw_datasets['train']._fingerprint)}")
 
     # 10.4: pre-process training/evaluation datasets
     def prepare_train_dataset(batch):
