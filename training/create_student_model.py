@@ -41,6 +41,13 @@ def parse_args():
         help="The HF Hub ID of the teacher checkpoint.",
     )
     parser.add_argument(
+        "--decoder_checkpoint",
+        type=str,
+        default=None,
+        required=False,
+        help="The HF Hub ID of the checkpoint ot use to unitialize the decoder layers. Defauts to the teacher checkpoint.",
+    )
+    parser.add_argument(
         "--subfolder",
         type=str,
         default="",
@@ -98,6 +105,7 @@ def init_student_model_from_teacher(
     push_to_hub=None,
     cache_dir=None,
     subfolder="",
+    decoder_checkpoint=None
 ):
     if decoder_layers_numbers is not None and len(decoder_layers_numbers) != decoder_layers:
         raise ValueError(
@@ -116,7 +124,17 @@ def init_student_model_from_teacher(
 
     teacher_config = teacher_model.config
     teacher_encoder_layers = teacher_config.encoder_layers
-    teacher_decoder_layers = teacher_config.decoder_layers
+    
+    if decoder_checkpoint is None:
+        teacher_decoder_layers = teacher_config.decoder_layers
+    else:
+        teacher_model_bis = WhisperForConditionalGeneration.from_pretrained(
+            teacher_checkpoint,
+            cache_dir=cache_dir,
+            subfolder=subfolder,
+            low_cpu_mem_usage=True,
+        )
+        teacher_decoder_layers = teacher_model_bis.decoder_layers
 
     student_config = copy.deepcopy(teacher_config)
     student_config.update(
@@ -183,6 +201,8 @@ def init_student_model_from_teacher(
 
     # remove the teacher params and model
     del teacher_model
+    if decoder_checkpoint is not None:
+        del teacher_model_bis
 
     # save the converted weights and model
     if save_dir is not None:
@@ -228,4 +248,5 @@ if __name__ == "__main__":
         push_to_hub=args.push_to_hub,
         cache_dir=args.cache_dir,
         subfolder=args.subfolder,
+        decoder_checkpoint=args.decoder_checkpoint
     )
