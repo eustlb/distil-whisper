@@ -806,6 +806,9 @@ def get_parameter_names(model, forbidden_layer_types, forbidden_module=None):
 
 
 def main():
+
+    torch.cuda.memory._record_memory_history()
+
     # 1. Parse input arguments
     # We keep distinct sets of args, for cleaner separation of model/data/training related args
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, DistillationTrainingArguments))
@@ -1845,6 +1848,8 @@ def main():
 
         if not continue_training:
             break
+
+    torch.cuda.memory._dump_snapshot(f"{'snapshot'}.pickle")
 
     accelerator.end_training()
 
