@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+import gc
 import time
 from dataclasses import dataclass, field
 from functools import partial
@@ -1564,10 +1565,19 @@ def main():
 
         # CE (data) loss
         ce_loss = student_outputs.loss
+
         # rescale distribution by temperature to ensure gradients scale correctly
         teacher_distribution = nn.functional.softmax(teacher_outputs.logits / temperature, dim=-1)
+        del teacher_outputs
+        gc.collect()
+        torch.cuda.empty_cache()
+
         # log softmax of student predictions for numerical stability
         student_distribution = nn.functional.log_softmax(student_outputs.logits / temperature, dim=-1)
+        del student_outputs
+        gc.collect()
+        torch.cuda.empty_cache()
+
         # KL-divergence loss (scaled by temperature)
         kl_loss = kl_divergence(teacher_distribution, student_distribution, batch["labels"]) * temperature**2
 
