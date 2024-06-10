@@ -37,7 +37,7 @@ import torch.nn as nn
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed
+from accelerate.utils import set_seed, AutocastKwargs, InitProcessGroupKwargs, TorchDynamoPlugin
 from datasets import (
     DatasetDict,
     IterableDataset,
@@ -781,11 +781,19 @@ def main():
         mixed_precision = "no"
         teacher_dtype = torch.float32
 
+
+    kwargs_handlers = None
+    if training_args.torch_compile:
+        # TODO(YL): add more compile modes?
+        print("COMPILE")
+        kwargs_handlers = [TorchDynamoPlugin(backend="inductor", mode="default", fullgraph=True)]  # reduce-overhead
+
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
         mixed_precision=mixed_precision,
         log_with=training_args.report_to,
         project_dir=training_args.output_dir,
+        kwargs_handlers=kwargs_handlers,
     )
 
     accelerator.init_trackers(
@@ -1560,6 +1568,7 @@ def main():
         resume_step = None
 
     for epoch in range(epochs_trained, num_epochs):
+        accelerator.free_memory()
         vectorized_datasets["train"] = vectorized_datasets["train"].shuffle(training_args.seed)
         train_dataloader = DataLoader(
             vectorized_datasets["train"],
