@@ -786,7 +786,7 @@ def main():
     if training_args.torch_compile:
         # TODO(YL): add more compile modes?
         print("COMPILE")
-        kwargs_handlers = [TorchDynamoPlugin(backend="inductor", mode="default", fullgraph=True)]  # reduce-overhead
+        kwargs_handlers = [TorchDynamoPlugin(backend="inductor", mode="", fullgraph=True)]  # reduce-overhead
 
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
@@ -1467,9 +1467,9 @@ def main():
         # CE (data) loss
         ce_loss = student_outputs.loss
         # rescale distribution by temperature to ensure gradients scale correctly
-        teacher_distribution = nn.functional.softmax(teacher_outputs.logits / temperature, dim=-1)
+        teacher_distribution = nn.functional.softmax(teacher_outputs.logits / temperature, dim=-1, dtype=torch.bfloat16)
         # log softmax of student predictions for numerical stability
-        student_distribution = nn.functional.log_softmax(student_outputs.logits / temperature, dim=-1)
+        student_distribution = nn.functional.log_softmax(student_outputs.logits / temperature, dim=-1, dtype=torch.bfloat16)
         # KL-divergence loss (scaled by temperature)
         kl_loss = kl_divergence(teacher_distribution, student_distribution, batch["labels"]) * temperature**2
 

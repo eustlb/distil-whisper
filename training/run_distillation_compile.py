@@ -787,7 +787,7 @@ def main():
     if training_args.torch_compile:
         # TODO(YL): add more compile modes?
         print("COMPILE")
-        kwargs_handlers.append(TorchDynamoPlugin(backend="inductor", mode="default", fullgraph=True))  # reduce-overhead
+        kwargs_handlers.append(TorchDynamoPlugin(backend="inductor", mode="reduce-overhead", fullgraph=True))  # reduce-overhead
 
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
@@ -1603,7 +1603,7 @@ def main():
         
         with torch.profiler.profile(
                 schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/no-compile-all'),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/compile-all-reduce-overhead'),
                 record_shapes=True,
                 profile_memory=True,
                 with_stack=True
