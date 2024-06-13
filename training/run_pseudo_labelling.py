@@ -728,7 +728,6 @@ def main():
         batch["labels"] = tokenizer(input_str, max_length=max_label_length, truncation=True).input_ids
         return batch
 
-    raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
     file_ids_dataset = IterableDatasetDict() if data_args.streaming else DatasetDict()
     for split in raw_datasets:
         file_ids_dataset[split] = raw_datasets[split][id_column_name]
