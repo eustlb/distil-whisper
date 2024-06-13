@@ -508,6 +508,7 @@ def main():
                 token=token,
                 streaming=data_args.streaming,
                 num_proc=data_args.preprocessing_num_workers if not data_args.streaming else None,
+                trust_remote_code=True
             )
 
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
@@ -586,6 +587,7 @@ def main():
 
     # 6. Resample speech dataset: `datasets` takes care of automatically loading and resampling the audio,
     # so we just need to set the correct target sampling rate.
+
     raw_datasets = raw_datasets.cast_column(
         data_args.audio_column_name,
         datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate),
@@ -626,7 +628,7 @@ def main():
                 else raw_datasets[split].select(range(data_args.max_samples_per_split))
             )
 
-    if speaker_id_column_name is not None:
+    if speaker_id_column_name is not None and not data_args.streaming:
         raw_datasets = raw_datasets.sort(speaker_id_column_name)
 
     def concatenate_dataset(batch):
@@ -689,9 +691,6 @@ def main():
                 )
             )
 
-        raw_datasets = raw_datasets.cast_column(
-            audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate)
-        )
         pretty_name = data_args.dataset_name.split("/")[-1]
 
         def postprocess_ids(speaker_ids, indices):
