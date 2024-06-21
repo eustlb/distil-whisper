@@ -1480,16 +1480,22 @@ def main():
 
     # Define eval fn
     def eval_step(batch):
-        student_model.eval()
-        teacher_model.eval()
+        if training_args.torch_compile:
+            student_model_eval = student_model._orig_mod
+            teacher_model_eval = teacher_model._orig_mod
+            student_model_eval = student_model_eval.eval()
+            teacher_model_eval = teacher_model_eval.eval()
+        else:
+            student_model_eval = student_model.eval()
+            teacher_model_eval = teacher_model_eval.eval()
 
         with torch.no_grad():
-            student_outputs = student_model(**batch)
+            student_outputs = student_model_eval(**batch)
             if share_hidden_states:
                 encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state.to(dtype=teacher_dtype))
-                teacher_outputs = teacher_model(encoder_outputs=encoder_outputs, labels=batch["labels"])
+                teacher_outputs = teacher_model_eval(encoder_outputs=encoder_outputs, labels=batch["labels"])
             else:
-                teacher_outputs = teacher_model(**batch)
+                teacher_outputs = teacher_model_eval(**batch)
 
         # CE (data) loss
         ce_loss = student_outputs.loss
