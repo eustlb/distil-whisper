@@ -1568,7 +1568,7 @@ def main():
         resume_step = None
 
     for epoch in range(epochs_trained, num_epochs):
-        accelerator.free_memory()
+        # accelerator.free_memory()
         vectorized_datasets["train"] = vectorized_datasets["train"].shuffle(training_args.seed)
         train_dataloader = DataLoader(
             vectorized_datasets["train"],
