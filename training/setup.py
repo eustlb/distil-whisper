@@ -27,6 +27,7 @@ _deps = [
     "wandb",
     "tensorboard",
     "nltk",
+    "numpy<2.0.0",
 ]
 
 _extras_dev_deps = [
