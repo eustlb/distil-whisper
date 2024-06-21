@@ -1506,8 +1506,13 @@ def main():
         return metrics
 
     def generate_step(batch):
-        student_model.eval()
-        output_ids = accelerator.unwrap_model(student_model).generate(batch["input_features"], **gen_kwargs)
+        if training_args.torch_compile:
+            student_model_generate = student_model._orig_mod
+            student_model_generate = student_model_generate.eval()
+        else:
+            student_model_generate = student_model.eval()
+
+        output_ids = accelerator.unwrap_model(student_model_generate).generate(batch["input_features"], **gen_kwargs)
         output_ids = accelerator.pad_across_processes(output_ids, dim=1, pad_index=tokenizer.pad_token_id)
         return output_ids
 
