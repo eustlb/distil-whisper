@@ -909,7 +909,7 @@ def main():
             generated_ids, labels = accelerator.gather_for_metrics((generated_ids, batch["labels"]))
             eval_preds.extend(generated_ids.cpu().numpy())
             eval_labels.extend(labels.cpu().numpy())
-            eval_ids.extend(file_ids['id'])
+            eval_ids.extend(file_ids[id_column_name])
 
             if step % training_args.logging_steps == 0 and step > 0:
                 batches.write(f"Saving transcriptions for split {split} step {step}")
