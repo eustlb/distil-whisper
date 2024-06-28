@@ -994,7 +994,7 @@ def main():
                         prompt_ids = [token for token in token_ids if token != decoder_eot_token_id]
                         prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:]
                         concatenated_prev.append(prompt_ids)
-                return {"condition_on_prev": concatenated_prev}
+                return {"condition_on_prev": concatenated_prev} 
 
             with accelerator.main_process_first():
                 raw_datasets[split] = raw_datasets[split].map(
