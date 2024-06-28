@@ -37,7 +37,7 @@ import torch.nn as nn
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed
+from accelerate.utils import set_seed, TorchDynamoPlugin
 from datasets import (
     DatasetDict,
     IterableDataset,
@@ -781,11 +781,16 @@ def main():
         mixed_precision = "no"
         teacher_dtype = torch.float32
 
+    kwargs_handlers = None
+    if training_args.torch_compile:
+        kwargs_handlers = [TorchDynamoPlugin(backend="inductor", mode="reduce-overhead", fullgraph=True)]  # reduce-overhead
+
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
         mixed_precision=mixed_precision,
         log_with=training_args.report_to,
         project_dir=training_args.output_dir,
+        kwargs_handlers=kwargs_handlers,
     )
 
     accelerator.init_trackers(
@@ -1472,16 +1477,22 @@ def main():
 
     # Define eval fn
     def eval_step(batch):
-        student_model.eval()
-        teacher_model.eval()
+        if training_args.torch_compile:
+            student_model_eval = student_model._orig_mod
+            teacher_model_eval = teacher_model._orig_mod
+            student_model_eval = student_model_eval.eval()
+            teacher_model_eval = teacher_model_eval.eval()
+        else:
+            student_model_eval = student_model.eval()
+            teacher_model_eval = teacher_model_eval.eval()
 
         with torch.no_grad():
-            student_outputs = student_model(**batch)
+            student_outputs = student_model_eval(**batch)
             if share_hidden_states:
                 encoder_outputs = BaseModelOutput(student_outputs.encoder_last_hidden_state.to(dtype=teacher_dtype))
-                teacher_outputs = teacher_model(encoder_outputs=encoder_outputs, labels=batch["labels"])
+                teacher_outputs = teacher_model_eval(encoder_outputs=encoder_outputs, labels=batch["labels"])
             else:
-                teacher_outputs = teacher_model(**batch)
+                teacher_outputs = teacher_model_eval(**batch)
 
         # CE (data) loss
         ce_loss = student_outputs.loss
@@ -1498,8 +1509,13 @@ def main():
         return metrics
 
     def generate_step(batch):
-        student_model.eval()
-        output_ids = accelerator.unwrap_model(student_model).generate(batch["input_features"], **gen_kwargs)
+        if training_args.torch_compile:
+            student_model_generate = student_model._orig_mod
+            student_model_generate = student_model_generate.eval()
+        else:
+            student_model_generate = student_model.eval()
+
+        output_ids = accelerator.unwrap_model(student_model_generate).generate(batch["input_features"], **gen_kwargs)
         output_ids = accelerator.pad_across_processes(output_ids, dim=1, pad_index=tokenizer.pad_token_id)
         return output_ids
 
