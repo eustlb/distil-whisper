@@ -628,8 +628,13 @@ def main():
                 else raw_datasets[split].select(range(data_args.max_samples_per_split))
             )
 
-    if speaker_id_column_name is not None:
+    if speaker_id_column_name is not None and not data_args.streaming:
         raw_datasets = raw_datasets.sort(speaker_id_column_name)
+    elif speaker_id_column_name is not None and data_args.streaming:
+        raise ValueError(
+            "Streaming mode is not yet compatible with speaker_id_column_name"
+            "Either set `--streaming=False` and download the audios locally, or open an issue on the Distil-Whisper repo to request this feature."
+        )
 
     def concatenate_dataset(batch):
         audio_arrays, texts, speaker_ids = [], [], []
