@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import datasets
+from datasets import Dataset, DatasetDict
 import evaluate
 import numpy as np
 import torch
@@ -508,6 +509,7 @@ def main():
                 token=token,
                 streaming=data_args.streaming,
                 num_proc=data_args.preprocessing_num_workers if not data_args.streaming else None,
+                trust_remote_code=True
             )
 
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
@@ -626,25 +628,36 @@ def main():
                 else raw_datasets[split].select(range(data_args.max_samples_per_split))
             )
 
-    if speaker_id_column_name is not None:
+    if speaker_id_column_name is not None and not data_args.streaming:
         raw_datasets = raw_datasets.sort(speaker_id_column_name)
+    elif speaker_id_column_name is not None and data_args.streaming:
+        raise ValueError(
+            "Streaming mode is not yet compatible with speaker_id_column_name"
+            "Either set `--streaming=False` and download the audios locally, or open an issue on the Distil-Whisper repo to request this feature."
+        )
 
     def concatenate_dataset(batch):
         audio_arrays, texts, speaker_ids = [], [], []
 
-        # skip corrupted samples
-        for row in table_iter(batch.pa_table, batch_size=1):
-            row = batch.formatter.format_row(row)
-            try:
-                sample_audio = row[audio_column_name]['array']
-                sample_text = row[text_column_name]
-                sample_speaker_id = row[speaker_id_column_name] if speaker_id_column_name else None
-            except LibsndfileError:
-                logger.warning(f"{row[id_column_name]} is corrupted! Skipping sample.")
-                continue
-            audio_arrays.append(sample_audio)
-            texts.append(sample_text)
-            speaker_ids.append(sample_speaker_id)
+        if not data_args.streaming:
+            # skip corrupted samples, not compatible with streaming
+            for row in table_iter(batch.pa_table, batch_size=1):
+                row = batch.formatter.format_row(row)
+                try:
+                    sample_audio = row[audio_column_name]['array']
+                    sample_text = row[text_column_name]
+                    sample_speaker_id = row[speaker_id_column_name] if speaker_id_column_name else None
+                except LibsndfileError:
+                    logger.warning(f"{row[id_column_name]} is corrupted! Skipping sample.")
+                    continue
+                audio_arrays.append(sample_audio)
+                texts.append(sample_text)
+                speaker_ids.append(sample_speaker_id)
+        else:
+            audio_arrays = [audio['array'] for audio in batch[audio_column_name]]
+            texts = batch[text_column_name]
+            speaker_ids = batch[speaker_id_column_name] if speaker_id_column_name else [None] * len(texts)
+
 
         # initialize concatenations
         concat_audio = [audio_arrays[0]]
@@ -672,22 +685,23 @@ def main():
 
         return batch
 
-    raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
-    if data_args.concatenate_audio and not data_args.streaming:
+    # keep track of raw dataset features (not accessible after map operation in streaming mode)
+    raw_datasets_features = set(next(iter(raw_datasets.values())).features.keys())
+    raw_datasets_features_kept = {audio_column_name, text_column_name, id_column_name, "condition_on_prev"} 
+    if data_args.concatenate_audio:
         with accelerator.main_process_first():
             raw_datasets = raw_datasets.map(
                 concatenate_dataset,
                 batched=True,
                 batch_size=preprocessing_batch_size,
-                num_proc=num_workers,
-                remove_columns=set(raw_datasets_features)
-                - {audio_column_name, text_column_name, id_column_name, "condition_on_prev"},
-                desc="Concatenating dataset...",
+                remove_columns=raw_datasets_features - raw_datasets_features_kept,
+                **(
+                    {
+                        "num_proc": num_workers,
+                        "desc": "Concatenating dataset..."
+                    } if not data_args.streaming else {}
+                )
             )
-
-        raw_datasets = raw_datasets.cast_column(
-            audio_column_name, datasets.features.Audio(sampling_rate=sampling_rate)
-        )
         pretty_name = data_args.dataset_name.split("/")[-1]
 
         def postprocess_ids(speaker_ids, indices):
@@ -702,10 +716,14 @@ def main():
                 postprocess_ids,
                 input_columns=[id_column_name],
                 with_indices=True,
-                desc="Setting sample idxs...",
                 batched=True,
                 batch_size=preprocessing_batch_size,
-                num_proc=num_workers,
+                **(
+                    {
+                        "num_proc": num_workers, 
+                        "desc": "Setting sample idxs..."
+                    } if not data_args.streaming else {}
+                )
             )
     elif data_args.concatenate_audio and data_args.streaming:
         raise ValueError(
@@ -725,21 +743,22 @@ def main():
         batch["labels"] = tokenizer(input_str, max_length=max_label_length, truncation=True).input_ids
         return batch
 
-    raw_datasets_features = list(next(iter(raw_datasets.values())).features.keys())
-    file_ids_dataset = IterableDatasetDict() if data_args.streaming else DatasetDict()
-    for split in raw_datasets:
-        file_ids_dataset[split] = raw_datasets[split][id_column_name]
-    if data_args.streaming:
-        with accelerator.main_process_first():
-            vectorized_datasets = raw_datasets.map(prepare_dataset, remove_columns=raw_datasets_features)
-    else:
-        with accelerator.main_process_first():
-            vectorized_datasets = raw_datasets.map(
-                prepare_dataset,
-                remove_columns=raw_datasets_features,
-                num_proc=num_workers,
-                desc="preprocess dataset",
+    file_ids_dataset = raw_datasets.map(
+        lambda x: x, 
+        remove_columns=raw_datasets_features_kept - {id_column_name}
+    )
+
+    with accelerator.main_process_first():
+        vectorized_datasets = raw_datasets.map(
+            prepare_dataset,
+            remove_columns=raw_datasets_features_kept,
+            **(
+                {
+                    "num_proc": num_workers,
+                    "desc": "preprocess dataset"
+                } if not data_args.streaming else {}
             )
+        )
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -770,7 +789,7 @@ def main():
             else:
                 repo_name = training_args.hub_model_id
             create_repo(repo_name, repo_type="dataset", exist_ok=True, token=training_args.hub_token)
-            snapshot_download(repo_id=repo_name, local_dir=output_dir)
+            snapshot_download(repo_id=repo_name, repo_type="dataset", local_dir=output_dir)
 
             # Ensure large txt files can be pushed to the Hub with git-lfs
             with open(os.path.join(output_dir, ".gitattributes"), "r+") as f:
@@ -895,7 +914,7 @@ def main():
             generated_ids, labels = accelerator.gather_for_metrics((generated_ids, batch["labels"]))
             eval_preds.extend(generated_ids.cpu().numpy())
             eval_labels.extend(labels.cpu().numpy())
-            eval_ids.extend(file_ids)
+            eval_ids.extend(file_ids[id_column_name])
 
             if step % training_args.logging_steps == 0 and step > 0:
                 batches.write(f"Saving transcriptions for split {split} step {step}")
@@ -967,10 +986,10 @@ def main():
         # Print metrics
         logger.info(wer_desc)
 
-        if not data_args.streaming:
-            raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", pred_str)
-            raw_datasets[split] = raw_datasets[split].add_column("eval_preds", eval_preds)
+        raw_datasets[split] = raw_datasets[split].add_column("whisper_transcript", pred_str)
+        raw_datasets[split] = raw_datasets[split].add_column("eval_preds", eval_preds)
 
+        if data_args.concatenate_audio:
             def add_concatenated_text(eval_preds, condition_on_prev):
                 concatenated_prev = [None]
                 for token_ids, condition in zip(eval_preds[:-1], condition_on_prev[1:]):
@@ -980,19 +999,22 @@ def main():
                         prompt_ids = [token for token in token_ids if token != decoder_eot_token_id]
                         prompt_ids = [decoder_prev_token_id] + prompt_ids[timestamp_position:]
                         concatenated_prev.append(prompt_ids)
-                return {"condition_on_prev": concatenated_prev}
+                return {"condition_on_prev": concatenated_prev} 
 
-            if data_args.concatenate_audio:
-                with accelerator.main_process_first():
-                    raw_datasets[split] = raw_datasets[split].map(
-                        add_concatenated_text,
-                        input_columns=["eval_preds", "condition_on_prev"],
-                        remove_columns=["eval_preds"],
-                        desc="Setting condition on prev...",
-                        batched=True,
-                        batch_size=preprocessing_batch_size,
-                        num_proc=num_workers,
+            with accelerator.main_process_first():
+                raw_datasets[split] = raw_datasets[split].map(
+                    add_concatenated_text,
+                    input_columns=["eval_preds", "condition_on_prev"],
+                    remove_columns=["eval_preds"],
+                    batched=True,
+                    batch_size=preprocessing_batch_size,
+                    **(
+                        {
+                            "num_proc": num_workers,
+                            "desc": "Setting condition on prev..."
+                        } if not data_args.streaming else {}
                     )
+                )
 
     logger.info("***** Running Labelling *****")
     logger.info("  Instantaneous batch size per device =" f" {training_args.per_device_eval_batch_size}")
@@ -1010,7 +1032,12 @@ def main():
                 repo_type="dataset",
                 commit_message=f"Saving final transcriptions for split {split.replace('.', '-').split('/')[-1]}",
             )
-    if not data_args.streaming and accelerator.is_main_process:
+    if accelerator.is_main_process:
+        if data_args.streaming:
+            # IterableDatasetDict to DatasetDict
+            raw_datasets = DatasetDict(
+                **{split: Dataset.from_generator(raw_datasets[split].__iter__) for split in raw_datasets}
+            )
         raw_datasets.save_to_disk(output_dir, num_proc=num_workers)
         if training_args.push_to_hub:
             raw_datasets.push_to_hub(repo_name, config_name=data_args.dataset_config_name)

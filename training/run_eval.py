@@ -508,40 +508,7 @@ def main():
         data_args.dataset_config_name,
         splits=data_args.dataset_split_name,
         text_column_names=data_args.text_column_name,
-    )
-
-    # load multiple eval sets
-    for dataset_dict in tqdm(dataset_names_dict, desc="Loading datasets..."):
-        sub_dataset = load_dataset(
-            dataset_dict["name"],
-            dataset_dict["config"],
-            split=dataset_dict["split"],
-            cache_dir=data_args.dataset_cache_dir,
-            streaming=data_args.streaming,
-            num_proc=data_args.preprocessing_num_workers,
-        )
-        
-        if data_args.only_short_form:
-            sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] <= 30)
-
-        if data_args.only_long_form:
-            sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] > 30)
-
-        if dataset_dict["text_column_name"] not in list(sub_dataset.features.keys()):
-            raise ValueError(
-                f"`--text_column_name` {dataset_dict['text_column_name']} not found in the evaluation "
-                f"dataset {dataset_dict['name']}. Ensure `text_column_name` is set to the correct column "
-                f"for the target text. Should be one of {' '.join(list(sub_dataset.features.keys()))}"
-            )
-        if dataset_dict["text_column_name"] != "text":
-            sub_dataset = sub_dataset.rename_column(dataset_dict["text_column_name"], "text")
-        if not data_args.streaming:
-            sub_dataset = sub_dataset.to_iterable_dataset()
-        
-        # Clean-up the dataset name for pretty logging
-        # ("distil-whisper/librispeech_asr", "validation.clean") -> "librispeech_asr/validation-clean"
-        pretty_name = f"{dataset_dict['name'].split('/')[-1]}/{dataset_dict['split'].replace('.', '-')}"
-        raw_datasets[pretty_name] = sub_dataset
+    ) 
 
     # 5. Load pretrained model, tokenizer, and feature extractor
     processor = WhisperProcessor.from_pretrained(
@@ -598,12 +565,51 @@ def main():
 
         assistant_model.cuda()
 
-    # 6. Resample speech dataset: `datasets` takes care of automatically loading and resampling the audio,
-    # so we just need to set the correct target sampling rate.
-    raw_datasets = raw_datasets.cast_column(
-        data_args.audio_column_name,
-        datasets.features.Audio(sampling_rate=processor.feature_extractor.sampling_rate),
-    )
+    # 6. load multiple eval sets
+    split_to_features = {}
+    for dataset_dict in tqdm(dataset_names_dict, desc="Loading datasets..."):
+        sub_dataset = load_dataset(
+            dataset_dict["name"],
+            dataset_dict["config"],
+            split=dataset_dict["split"],
+            cache_dir=data_args.dataset_cache_dir,
+            streaming=data_args.streaming,
+            num_proc=data_args.preprocessing_num_workers,
+        )
+
+        # keep track of raw dataset features (not accessible after operations in streaming mode)
+        sub_dataset_features = set(sub_dataset.features.keys())
+        
+        sub_dataset = sub_dataset.cast_column(
+            data_args.audio_column_name,
+            datasets.features.Audio(sampling_rate=processor.feature_extractor.sampling_rate),
+        )
+ 
+        if data_args.only_short_form:
+            sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] <= 30)
+
+        if data_args.only_long_form:
+            sub_dataset = sub_dataset.filter(lambda x: len(x["audio"]["array"]) / x["audio"]["sampling_rate"] > 30)
+
+        if dataset_dict["text_column_name"] not in list(sub_dataset_features):
+            raise ValueError(
+                f"`--text_column_name` {dataset_dict['text_column_name']} not found in the evaluation "
+                f"dataset {dataset_dict['name']}. Ensure `text_column_name` is set to the correct column "
+                f"for the target text. Should be one of {' '.join(list(sub_dataset_features))}"
+            )
+        if dataset_dict["text_column_name"] != "text":
+            sub_dataset = sub_dataset.rename_column(dataset_dict["text_column_name"], "text")
+            sub_dataset_features.remove(dataset_dict["text_column_name"])
+            sub_dataset_features.add("text")
+        if not data_args.streaming:
+            sub_dataset = sub_dataset.to_iterable_dataset()
+        
+        # Clean-up the dataset name for pretty logging
+        # ("distil-whisper/librispeech_asr", "validation.clean") -> "librispeech_asr/validation-clean"
+        pretty_name = f"{dataset_dict['name'].split('/')[-1]}/{dataset_dict['split'].replace('.', '-')}"
+        split_to_features[pretty_name] = sub_dataset_features
+        raw_datasets[pretty_name] = sub_dataset
+
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -654,7 +660,9 @@ def main():
     vectorized_datasets = IterableDatasetDict()
 
     for split in raw_datasets:
-        raw_datasets_features = list(raw_datasets[split].features.keys())
+        # features are not accessible after applying operations in streaming mode
+        # use the saved features
+        raw_datasets_features = split_to_features[split]
 
         vectorized_datasets[split] = raw_datasets[split].map(
             function=prepare_dataset,
