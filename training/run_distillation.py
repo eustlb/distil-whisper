@@ -808,7 +808,7 @@ def main():
 
     kwargs_handlers = None
     if training_args.torch_compile:
-        kwargs_handlers = [TorchDynamoPlugin(backend="inductor", mode="reduce-overhead", fullgraph=True)]  # reduce-overhead
+        kwargs_handlers = [TorchDynamoPlugin(backend="inductor", mode="default", fullgraph=True)]  # reduce-overhead
 
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
