@@ -643,6 +643,7 @@ def load_multiple_datasets(
             dataset_dict["config"],
             split=dataset_dict["split"],
             streaming=streaming,
+            trust_remote_code=True,
             **kwargs,
         )
         # resample to specified sampling rate
@@ -927,6 +928,7 @@ def main():
                 cache_dir=data_args.dataset_cache_dir,
                 token=model_args.token,
                 streaming=data_args.streaming,
+                trust_remote_code=True,
             )
             if data_args.eval_text_column_name != "text":
                 raw_datasets["eval"] = raw_datasets["eval"].rename_column(data_args.eval_text_column_name, "text")
@@ -946,6 +948,7 @@ def main():
                     cache_dir=data_args.dataset_cache_dir,
                     token=model_args.token,
                     streaming=data_args.streaming,
+                    trust_remote_code=True,
                 )
                 # make column names consistent (text, audio)
                 if dataset_dict["text_column_name"] != "text":
